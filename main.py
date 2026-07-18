@@ -3,13 +3,17 @@ import cv2
 import numpy as np
 import easyocr
 import gc
+import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+# Khống chế số luồng của Torch để không sinh thêm thread làm tăng RAM
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 app = FastAPI()
 
-# Khởi tạo Reader chỉ ĐÚNG MỘT LẦN khi start app
-# Đặt quantize=True để nén model AI giúp giảm gần một nửa dung lượng RAM tiêu thụ
+# Khởi tạo reader tối giản dung lượng
 reader = easyocr.Reader(['en'], gpu=False, quantize=True) 
 
 class OCRRequest(BaseModel):
@@ -41,11 +45,12 @@ def preprocess(img):
     else:
         final_img = thresh
 
+    # Chỉ phóng to vừa đủ (gấp 1.5 lần thay vì 2 lần để giảm pixel xử lý, cứu RAM)
     img_resized = cv2.resize(
         final_img, 
         None, 
-        fx=2, 
-        fy=2, 
+        fx=1.5, 
+        fy=1.5, 
         interpolation=cv2.INTER_NEAREST
     )
     return img_resized
@@ -67,6 +72,7 @@ async def ocr_api(data: OCRRequest):
 
     processed_img = preprocess(img)
 
+    # Đọc text kết hợp giải phóng RAM phụ
     result = reader.readtext(
         processed_img, 
         detail=0, 
@@ -75,7 +81,7 @@ async def ocr_api(data: OCRRequest):
 
     text_combined = "".join(result).replace(" ", "").strip()
 
-    # Ép buộc giải phóng bộ nhớ tạm ngay sau khi dùng xong
+    # Dọn dẹp triệt để
     del img, processed_img, result
     gc.collect()
 
